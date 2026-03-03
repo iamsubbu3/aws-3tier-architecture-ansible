@@ -156,8 +156,8 @@ The ALB distributes traffic to web servers, which proxy requests to the Flask ap
 
 ## 👤 Author
 
-Subramanyam P
-DevOps Engineer
+**Subramanyam P**  
+DevOps Engineer  
 AWS | Ansible | Linux | Python
 
 ---
