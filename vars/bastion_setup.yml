@@ -1,0 +1,5 @@
+bastion_ami: ami-06e3c045d79fd65d9
+region: us-east-2
+MYIP: "0.0.0.0/32"
+keyName: ohio-keypair
+instanceType: t3.micro

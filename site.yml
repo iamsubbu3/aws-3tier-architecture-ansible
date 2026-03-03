@@ -1,0 +1,191 @@
+---
+############################################################
+# CONFIGURE FLASK APP TIER
+############################################################
+- name: Configure Flask App Tier
+  hosts: app
+  become: yes
+
+  vars:
+    db_host: vprofile-mysql.cly044aaqldy.us-east-2.rds.amazonaws.com
+    db_user: admin
+    db_pass: Admin1234
+    db_name: vprofiledb
+
+  tasks:
+
+    - name: Install required system packages
+      apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Create application directory
+      file:
+        path: /opt/flaskapp
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Create virtual environment
+      command: python3 -m venv /opt/flaskapp/venv
+      args:
+        creates: /opt/flaskapp/venv
+
+    - name: Install Flask and PyMySQL in venv
+      pip:
+        name:
+          - flask
+          - pymysql
+        virtualenv: /opt/flaskapp/venv
+
+    - name: Deploy Updated Flask App
+      copy:
+        dest: /opt/flaskapp/app.py
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+        content: |
+          from flask import Flask, request, redirect
+          import pymysql
+          import socket
+
+          app = Flask(__name__)
+
+          DB_HOST = "{{ db_host }}"
+          DB_USER = "{{ db_user }}"
+          DB_PASS = "{{ db_pass }}"
+          DB_NAME = "{{ db_name }}"
+
+          def get_connection():
+              return pymysql.connect(
+                  host=DB_HOST,
+                  user=DB_USER,
+                  password=DB_PASS,
+                  database=DB_NAME
+              )
+
+          @app.route("/", methods=["GET", "POST"])
+          def home():
+              conn = get_connection()
+              cursor = conn.cursor()
+
+              cursor.execute("""
+                  CREATE TABLE IF NOT EXISTS visitors (
+                      id INT AUTO_INCREMENT PRIMARY KEY,
+                      message VARCHAR(255)
+                  )
+              """)
+
+              # Insert only when button is clicked
+              if request.method == "POST":
+                  cursor.execute("INSERT INTO visitors (message) VALUES ('Hello from Flask + RDS')")
+                  conn.commit()
+                  return redirect("/")
+
+              cursor.execute("SELECT * FROM visitors")
+              rows = cursor.fetchall()
+              conn.close()
+
+              hostname = socket.gethostname()
+
+              output = f"<h2>Backend Server: {hostname}</h2>"
+              output += """
+                  <form method="POST">
+                      <button type="submit">Add Visitor</button>
+                  </form>
+                  <hr>
+                  <h3>Visitors:</h3>
+              """
+
+              for row in rows:
+                  output += f"<p>{row}</p>"
+
+              return output
+
+          if __name__ == "__main__":
+              app.run(host="0.0.0.0", port=5000)
+
+    - name: Create systemd service for Flask
+      copy:
+        dest: /etc/systemd/system/flaskapp.service
+        content: |
+          [Unit]
+          Description=Flask Application
+          After=network.target
+
+          [Service]
+          User=ubuntu
+          WorkingDirectory=/opt/flaskapp
+          ExecStart=/opt/flaskapp/venv/bin/python /opt/flaskapp/app.py
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable and Restart Flask Service
+      systemd:
+        name: flaskapp
+        state: restarted
+        enabled: yes
+
+
+############################################################
+# CONFIGURE APACHE WEB TIER
+############################################################
+- name: Configure Apache Web Tier
+  hosts: web
+  become: yes
+
+  tasks:
+
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+        update_cache: yes
+
+    - name: Enable required Apache modules
+      command: "{{ item }}"
+      loop:
+        - a2enmod proxy
+        - a2enmod proxy_http
+        - a2enmod proxy_balancer
+        - a2enmod lbmethod_byrequests
+      notify: Restart Apache
+
+    - name: Configure Reverse Proxy with Load Balancing
+      copy:
+        dest: /etc/apache2/sites-available/flask.conf
+        content: |
+          <VirtualHost *:80>
+
+              ProxyPreserveHost On
+
+              <Proxy "balancer://flaskcluster">
+                  {% for host in groups['app'] %}
+                  BalancerMember http://{{ hostvars[host]['ansible_host'] }}:5000
+                  {% endfor %}
+              </Proxy>
+
+              ProxyPass / balancer://flaskcluster/
+              ProxyPassReverse / balancer://flaskcluster/
+
+          </VirtualHost>
+      notify: Restart Apache
+
+    - name: Enable Flask site
+      command: a2ensite flask.conf
+      notify: Restart Apache
+
+  handlers:
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted

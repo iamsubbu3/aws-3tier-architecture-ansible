@@ -1,0 +1,80 @@
+---
+- name: Setup Vprofile RDS Layer
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  collections:
+    - amazon.aws
+
+  vars:
+    db_name: vprofiledb
+    db_user: admin
+    db_pass: Admin1234
+    db_instance_class: db.t3.micro
+
+  tasks:
+
+    # ================= IMPORT VARIABLES =================
+
+    - name: Import Bastion Variables
+      include_vars: vars/bastion_setup.yml
+
+    - name: Import VPC Output Variables
+      include_vars: vars/output_vars.yml
+
+
+    # ================= GET DB SECURITY GROUP =================
+
+    - name: Get DB Security Group Info
+      amazon.aws.ec2_security_group_info:
+        region: "{{ region }}"
+        filters:
+          group-name: DB-tier-sg
+          vpc-id: "{{ vpcid }}"
+      register: db_sg_info
+
+
+    # ================= DB SUBNET GROUP =================
+
+    - name: Ensure DB Subnet Group
+      amazon.aws.rds_subnet_group:
+        state: present
+        name: vprofile-db-subnet-group
+        description: Subnet group for Vprofile MySQL
+        region: "{{ region }}"
+        subnets:
+          - "{{ privsub1id }}"
+          - "{{ privsub2id }}"
+          - "{{ privsub3id }}"
+
+
+    # ================= CREATE RDS INSTANCE =================
+
+    - name: Ensure MySQL RDS Instance
+      amazon.aws.rds_instance:
+        db_instance_identifier: vprofile-mysql
+        engine: mysql
+        engine_version: "8.0"
+        db_instance_class: "{{ db_instance_class }}"
+        allocated_storage: 20
+        master_username: "{{ db_user }}"
+        master_user_password: "{{ db_pass }}"
+        db_name: "{{ db_name }}"
+        vpc_security_group_ids:
+          - "{{ db_sg_info.security_groups[0].group_id }}"
+        db_subnet_group_name: vprofile-db-subnet-group
+        publicly_accessible: false
+        multi_az: false
+        storage_type: gp2
+        region: "{{ region }}"
+        state: present
+        wait: yes
+      register: rds_out
+
+
+    # ================= OUTPUT =================
+
+    - name: Show RDS Endpoint
+      debug:
+        msg: "RDS Endpoint: {{ rds_out.endpoint }}"

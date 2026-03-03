@@ -1,0 +1,126 @@
+---
+- name: Setup Vprofile ALB Layer
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  collections:
+    - amazon.aws
+    - community.aws
+
+  tasks:
+
+    # ================= IMPORT VARIABLES =================
+
+    - name: Import Bastion Variables
+      include_vars: vars/bastion_setup.yml
+
+    - name: Import VPC Output Variables
+      include_vars: vars/output_vars.yml
+
+
+    # ================= ALB SECURITY GROUP =================
+
+    - name: Ensure ALB Security Group
+      amazon.aws.ec2_security_group:
+        name: ALB-sg
+        description: Allow HTTP from Internet
+        vpc_id: "{{ vpcid }}"
+        region: "{{ region }}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+        purge_rules: no
+        state: present
+      register: alb_sg
+
+
+    # ================= ALLOW ALB TO WEB =================
+
+    - name: Ensure Web Tier allows HTTP from ALB
+      amazon.aws.ec2_security_group:
+        name: Web-tier-sg
+        description: Allow HTTP from ALB and SSH from Bastion
+        vpc_id: "{{ vpcid }}"
+        region: "{{ region }}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            group_id: "{{ alb_sg.group_id }}"
+        purge_rules: no
+        state: present
+
+
+    # ================= TARGET GROUP =================
+
+    - name: Ensure Target Group
+      community.aws.elb_target_group:
+        name: vprofile-web-tg
+        protocol: HTTP
+        port: 80
+        vpc_id: "{{ vpcid }}"
+        region: "{{ region }}"
+        target_type: instance
+        health_check_protocol: HTTP
+        health_check_path: /
+        health_check_interval: 30
+        healthy_threshold_count: 2
+        unhealthy_threshold_count: 3
+        state: present
+      register: tg_out
+
+
+    # ================= GET WEB INSTANCES =================
+
+    - name: Get running Web instances
+      amazon.aws.ec2_instance_info:
+        region: "{{ region }}"
+        filters:
+          tag:Tier: Web
+          instance-state-name: running
+      register: web_instances
+
+
+    # ================= REGISTER WEB INSTANCES =================
+
+    - name: Register Web instances to Target Group
+      community.aws.elb_target:
+        region: "{{ region }}"
+        target_group_arn: "{{ tg_out.target_group_arn }}"
+        target_id: "{{ item.instance_id }}"
+        state: present
+      loop: "{{ web_instances.instances }}"
+      when: web_instances.instances | length > 0
+
+
+    # ================= CREATE ALB + LISTENER =================
+
+    - name: Ensure ALB with Listener
+      amazon.aws.elb_application_lb:
+        name: vprofile-alb
+        subnets:
+          - "{{ pubsub1id }}"
+          - "{{ pubsub2id }}"
+          - "{{ pubsub3id }}"
+        security_groups:
+          - "{{ alb_sg.group_id }}"
+        scheme: internet-facing
+        region: "{{ region }}"
+        state: present
+        listeners:
+          - Protocol: HTTP
+            Port: 80
+            DefaultActions:
+              - Type: forward
+                TargetGroupArn: "{{ tg_out.target_group_arn }}"
+      register: alb_out
+
+
+    # ================= OUTPUT =================
+
+    - name: Show ALB DNS Name
+      debug:
+        msg: "ALB DNS: {{ alb_out.dns_name }}"

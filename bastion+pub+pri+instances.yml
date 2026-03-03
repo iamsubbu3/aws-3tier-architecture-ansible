@@ -1,0 +1,189 @@
+---
+- name: Setup Vprofile Compute Layer
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  collections:
+    - amazon.aws
+
+  tasks:
+
+  # ================= IMPORT VARIABLES =================
+
+  - name: Import Bastion Variables
+    include_vars: vars/bastion_setup.yml
+
+  - name: Import VPC Output Variables
+    include_vars: vars/output_vars.yml
+
+
+  # ================= SECURITY GROUPS =================
+
+  - name: Create Security Group for Bastion
+    amazon.aws.ec2_security_group:
+      name: Bastion-host-sg
+      description: Allow SSH from anywhere (adjust later for security)
+      vpc_id: "{{ vpcid }}"
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: 0.0.0.0/0
+      purge_rules: no
+
+  - name: Create Security Group for Web Tier
+    amazon.aws.ec2_security_group:
+      name: Web-tier-sg
+      description: Allow HTTP from ALB and SSH from Bastion
+      vpc_id: "{{ vpcid }}"
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 80
+          to_port: 80
+          group_name: ALB-sg
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          group_name: Bastion-host-sg
+      purge_rules: no
+
+  - name: Create Security Group for App Tier
+    amazon.aws.ec2_security_group:
+      name: App-tier-sg
+      description: Allow SSH from Bastion and Flask from Web Tier
+      vpc_id: "{{ vpcid }}"
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          group_name: Bastion-host-sg
+        - proto: tcp
+          from_port: 5000
+          to_port: 5000
+          group_name: Web-tier-sg
+      purge_rules: no
+
+  - name: Create Security Group for DB Tier
+    amazon.aws.ec2_security_group:
+      name: DB-tier-sg
+      description: Allow MySQL from App Tier and Bastion
+      vpc_id: "{{ vpcid }}"
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 3306
+          to_port: 3306
+          group_name: App-tier-sg
+        - proto: tcp
+          from_port: 3306
+          to_port: 3306
+          group_name: Bastion-host-sg
+      purge_rules: no
+
+
+  # ================= BASTION =================
+
+  - name: Ensure Bastion Host
+    amazon.aws.ec2_instance:
+      name: Bastion_host
+      key_name: ohio-keypair
+      region: "{{ region }}"
+      instance_type: "{{ instanceType }}"
+      image_id: "{{ bastion_ami }}"
+      vpc_subnet_id: "{{ pubsub3id }}"
+      security_group: Bastion-host-sg
+      network:
+        assign_public_ip: true
+      state: running
+      exact_count: 1
+      wait: yes
+      tags:
+        Name: Bastion_host
+        Tier: Bastion
+        Project: Vprofile
+
+
+  # ================= WEB TIER =================
+
+  - name: Ensure Web Instance 1
+    amazon.aws.ec2_instance:
+      name: WebInstance1
+      key_name: ohio-keypair
+      region: "{{ region }}"
+      instance_type: "{{ instanceType }}"
+      image_id: "{{ bastion_ami }}"
+      vpc_subnet_id: "{{ pubsub1id }}"
+      security_group: Web-tier-sg
+      network:
+        assign_public_ip: true
+      state: running
+      exact_count: 1
+      wait: yes
+      tags:
+        Name: WebInstance1
+        Tier: Web
+        Project: Vprofile
+
+  - name: Ensure Web Instance 2
+    amazon.aws.ec2_instance:
+      name: WebInstance2
+      key_name: ohio-keypair
+      region: "{{ region }}"
+      instance_type: "{{ instanceType }}"
+      image_id: "{{ bastion_ami }}"
+      vpc_subnet_id: "{{ pubsub2id }}"
+      security_group: Web-tier-sg
+      network:
+        assign_public_ip: true
+      state: running
+      exact_count: 1
+      wait: yes
+      tags:
+        Name: WebInstance2
+        Tier: Web
+        Project: Vprofile
+
+
+  # ================= APP TIER =================
+
+  - name: Ensure App Instance 1
+    amazon.aws.ec2_instance:
+      name: AppInstance1
+      key_name: ohio-keypair
+      region: "{{ region }}"
+      instance_type: "{{ instanceType }}"
+      image_id: "{{ bastion_ami }}"
+      vpc_subnet_id: "{{ privsub1id }}"
+      security_group: App-tier-sg
+      network:
+        assign_public_ip: false
+      state: running
+      exact_count: 1
+      wait: yes
+      tags:
+        Name: AppInstance1
+        Tier: App
+        Project: Vprofile
+
+  - name: Ensure App Instance 2
+    amazon.aws.ec2_instance:
+      name: AppInstance2
+      key_name: ohio-keypair
+      region: "{{ region }}"
+      instance_type: "{{ instanceType }}"
+      image_id: "{{ bastion_ami }}"
+      vpc_subnet_id: "{{ privsub3id }}"
+      security_group: App-tier-sg
+      network:
+        assign_public_ip: false
+      state: running
+      exact_count: 1
+      wait: yes
+      tags:
+        Name: AppInstance2
+        Tier: App
+        Project: Vprofile
